@@ -1,4 +1,4 @@
-=import imaplib
+import imaplib
 import email
 import requests
 import time
