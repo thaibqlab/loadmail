@@ -11,94 +11,71 @@ CHAT_ID = "1460560636"
 EMAIL_FILE = "emails.txt"
 SEEN_FILE = "seen.json"
 
-CHECK_INTERVAL = 15
-MAX_THREADS = 10
+CHECK_INTERVAL = 20
+MAX_THREADS = 5
 
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-# TELEGRAM
 def send(msg):
-
     try:
-
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": CHAT_ID,
-                "text": msg
-            },
+            json={"chat_id": CHAT_ID, "text": msg},
             timeout=20
         )
+    except:
+        pass
 
-    except Exception as e:
-        log(f"Telegram error {e}")
 
-
-# LOAD SEEN
 def load_seen():
-
     if not os.path.exists(SEEN_FILE):
         return set()
 
     try:
-
         with open(SEEN_FILE) as f:
             return set(json.load(f))
-
     except:
         return set()
 
 
 def save_seen(seen):
-
     try:
-
         with open(SEEN_FILE, "w") as f:
             json.dump(list(seen), f)
-
     except:
         pass
 
 
-# LOAD EMAIL LIST
 def load_emails():
 
     accounts = []
 
-    try:
+    with open(EMAIL_FILE) as f:
 
-        with open(EMAIL_FILE) as f:
+        for line in f:
 
-            for line in f:
+            line = line.strip()
 
-                line = line.strip()
+            if not line:
+                continue
 
-                if not line:
-                    continue
+            parts = line.split("|")
 
-                parts = line.split("|")
+            if len(parts) < 4:
+                continue
 
-                # format: email|password|refresh_token|client_id
-                if len(parts) < 4:
-                    continue
+            email_addr = parts[0]
+            refresh_token = parts[2]
+            client_id = parts[3]
 
-                email_addr = parts[0]
-                refresh_token = parts[2]
-                client_id = parts[3]
-
-                accounts.append((email_addr, refresh_token, client_id))
-
-    except Exception as e:
-
-        log(f"Load email error {e}")
+            accounts.append((email_addr, refresh_token, client_id))
 
     return accounts
 
 
-# CALL MAIL API
 def get_messages(email_addr, refresh_token, client_id):
 
     url = "https://tools.dongvanfb.net/api/get_messages_oauth2"
@@ -109,28 +86,27 @@ def get_messages(email_addr, refresh_token, client_id):
         "client_id": client_id
     }
 
-    for _ in range(3):
+    for _ in range(5):
 
         try:
 
             r = requests.post(url, json=payload, timeout=25)
 
-            if r.status_code != 200:
-                time.sleep(2)
-                continue
+            if r.status_code == 200:
 
-            try:
-                return r.json()
-            except:
-                return None
+                try:
+                    return r.json()
+                except:
+                    return None
+
+            time.sleep(3)
 
         except:
-            time.sleep(2)
+            time.sleep(3)
 
     return None
 
 
-# CHECK ACCOUNT
 def check_account(account, seen):
 
     email_addr, refresh_token, client_id = account
@@ -168,7 +144,6 @@ Subject: {subject}
         log(f"NEW MAIL {email_addr}")
 
 
-# MAIN LOOP
 def main():
 
     log("MAIL BOT STARTED")
@@ -189,6 +164,7 @@ def main():
 
                     for acc in accounts:
                         executor.submit(check_account, acc, seen)
+                        time.sleep(0.3)
 
                 save_seen(seen)
 
