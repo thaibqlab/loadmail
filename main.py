@@ -11,8 +11,8 @@ CHAT_ID = "1460560636"
 EMAIL_FILE = "emails.txt"
 SEEN_FILE = "seen.json"
 
-CHECK_INTERVAL = 10
-MAX_THREADS = 20
+CHECK_INTERVAL = 15
+MAX_THREADS = 10
 
 
 def log(msg):
@@ -24,7 +24,7 @@ def send(msg):
 
     try:
 
-        r = requests.post(
+        requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": CHAT_ID,
@@ -33,11 +33,8 @@ def send(msg):
             timeout=20
         )
 
-        if r.status_code != 200:
-            log(f"Telegram error {r.text}")
-
     except Exception as e:
-        log(f"Telegram exception {e}")
+        log(f"Telegram error {e}")
 
 
 # LOAD SEEN
@@ -62,11 +59,11 @@ def save_seen(seen):
         with open(SEEN_FILE, "w") as f:
             json.dump(list(seen), f)
 
-    except Exception as e:
-        log(f"Save seen error {e}")
+    except:
+        pass
 
 
-# LOAD EMAILS
+# LOAD EMAIL LIST
 def load_emails():
 
     accounts = []
@@ -86,7 +83,6 @@ def load_emails():
 
                 # format: email|password|refresh_token|client_id
                 if len(parts) < 4:
-                    log(f"Bad format {line}")
                     continue
 
                 email_addr = parts[0]
@@ -102,31 +98,36 @@ def load_emails():
     return accounts
 
 
-# API CALL
+# CALL MAIL API
 def get_messages(email_addr, refresh_token, client_id):
 
-    try:
+    url = "https://tools.dongvanfb.net/api/get_messages_oauth2"
 
-        url = "https://tools.dongvanfb.net/api/get_messages_oauth2"
+    payload = {
+        "email": email_addr,
+        "refresh_token": refresh_token,
+        "client_id": client_id
+    }
 
-        payload = {
-            "email": email_addr,
-            "refresh_token": refresh_token,
-            "client_id": client_id
-        }
+    for _ in range(3):
 
-        r = requests.post(url, json=payload, timeout=30)
+        try:
 
-        if r.status_code != 200:
-            log(f"API error {r.text}")
-            return None
+            r = requests.post(url, json=payload, timeout=25)
 
-        return r.json()
+            if r.status_code != 200:
+                time.sleep(2)
+                continue
 
-    except Exception as e:
+            try:
+                return r.json()
+            except:
+                return None
 
-        log(f"API exception {e}")
-        return None
+        except:
+            time.sleep(2)
+
+    return None
 
 
 # CHECK ACCOUNT
@@ -134,46 +135,40 @@ def check_account(account, seen):
 
     email_addr, refresh_token, client_id = account
 
-    try:
+    data = get_messages(email_addr, refresh_token, client_id)
 
-        data = get_messages(email_addr, refresh_token, client_id)
+    if not data:
+        return
 
-        if not data:
-            return
+    messages = data.get("messages")
 
-        messages = data.get("messages")
+    if not messages:
+        return
 
-        if not messages:
-            return
+    for mail in messages:
 
-        for mail in messages:
+        subject = mail.get("subject")
+        message_id = mail.get("id")
 
-            subject = mail.get("subject")
-            message_id = mail.get("id")
+        key = email_addr + str(message_id)
 
-            key = email_addr + str(message_id)
+        if key in seen:
+            continue
 
-            if key in seen:
-                continue
+        seen.add(key)
 
-            seen.add(key)
-
-            msg = f"""📩 NEW MAIL
+        msg = f"""📩 NEW MAIL
 
 Email: {email_addr}
 Subject: {subject}
 """
 
-            send(msg)
+        send(msg)
 
-            log(f"NEW MAIL {email_addr}")
-
-    except Exception as e:
-
-        log(f"Account error {email_addr} {e}")
+        log(f"NEW MAIL {email_addr}")
 
 
-# MAIN
+# MAIN LOOP
 def main():
 
     log("MAIL BOT STARTED")
@@ -188,9 +183,7 @@ def main():
 
             accounts = load_emails()
 
-            if not accounts:
-                log("No accounts")
-            else:
+            if accounts:
 
                 with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
 
