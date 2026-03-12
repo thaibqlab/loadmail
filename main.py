@@ -3,7 +3,6 @@ import time
 import json
 import os
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 
 BOT_TOKEN = "8444717416:AAGSTPQnuwMd1vfn_C3kyAHrGu59AgNH5Xk"
 CHAT_ID = "1460560636"
@@ -12,43 +11,70 @@ EMAIL_FILE = "emails.txt"
 SEEN_FILE = "seen.json"
 
 CHECK_INTERVAL = 20
-MAX_THREADS = 5
 
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+# TELEGRAM
 def send(msg):
+
     try:
-        requests.post(
+
+        r = requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id": CHAT_ID, "text": msg},
+            json={
+                "chat_id": CHAT_ID,
+                "text": msg
+            },
             timeout=20
         )
-    except:
-        pass
+
+        if r.status_code == 429:
+
+            data = r.json()
+
+            wait = data["parameters"]["retry_after"]
+
+            log(f"Telegram rate limit wait {wait}s")
+
+            time.sleep(wait)
+
+    except Exception as e:
+
+        log(f"Telegram error {e}")
+
+    time.sleep(1)
 
 
+# LOAD SEEN
 def load_seen():
+
     if not os.path.exists(SEEN_FILE):
         return set()
 
     try:
+
         with open(SEEN_FILE) as f:
             return set(json.load(f))
+
     except:
         return set()
 
 
 def save_seen(seen):
+
     try:
+
         with open(SEEN_FILE, "w") as f:
             json.dump(list(seen), f)
+
     except:
         pass
 
 
+# LOAD EMAIL LIST
 def load_emails():
 
     accounts = []
@@ -76,6 +102,7 @@ def load_emails():
     return accounts
 
 
+# CALL MAIL API
 def get_messages(email_addr, refresh_token, client_id):
 
     url = "https://tools.dongvanfb.net/api/get_messages_oauth2"
@@ -86,7 +113,7 @@ def get_messages(email_addr, refresh_token, client_id):
         "client_id": client_id
     }
 
-    for _ in range(5):
+    for _ in range(3):
 
         try:
 
@@ -99,14 +126,16 @@ def get_messages(email_addr, refresh_token, client_id):
                 except:
                     return None
 
-            time.sleep(3)
+            time.sleep(2)
 
         except:
-            time.sleep(3)
+
+            time.sleep(2)
 
     return None
 
 
+# CHECK ACCOUNT
 def check_account(account, seen):
 
     email_addr, refresh_token, client_id = account
@@ -144,6 +173,7 @@ Subject: {subject}
         log(f"NEW MAIL {email_addr}")
 
 
+# MAIN LOOP
 def main():
 
     log("MAIL BOT STARTED")
@@ -158,15 +188,13 @@ def main():
 
             accounts = load_emails()
 
-            if accounts:
+            for acc in accounts:
 
-                with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+                check_account(acc, seen)
 
-                    for acc in accounts:
-                        executor.submit(check_account, acc, seen)
-                        time.sleep(0.3)
+                time.sleep(0.5)
 
-                save_seen(seen)
+            save_seen(seen)
 
         except Exception as e:
 
