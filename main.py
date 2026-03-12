@@ -1,68 +1,210 @@
 import requests
 import time
+import json
+import os
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 BOT_TOKEN = "8444717416:AAGSTPQnuwMd1vfn_C3kyAHrGu59AgNH5Xk"
 CHAT_ID = "1460560636"
 
+EMAIL_FILE = "emails.txt"
+SEEN_FILE = "seen.json"
+
+CHECK_INTERVAL = 10
+MAX_THREADS = 20
+
+
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+# TELEGRAM
 def send(msg):
 
-    requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        json={
-            "chat_id": CHAT_ID,
-            "text": msg
+    try:
+
+        r = requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": CHAT_ID,
+                "text": msg
+            },
+            timeout=20
+        )
+
+        if r.status_code != 200:
+            log(f"Telegram error {r.text}")
+
+    except Exception as e:
+        log(f"Telegram exception {e}")
+
+
+# LOAD SEEN MAIL
+def load_seen():
+
+    if not os.path.exists(SEEN_FILE):
+        return set()
+
+    try:
+
+        with open(SEEN_FILE) as f:
+            return set(json.load(f))
+
+    except:
+        return set()
+
+
+def save_seen(seen):
+
+    try:
+
+        with open(SEEN_FILE, "w") as f:
+            json.dump(list(seen), f)
+
+    except Exception as e:
+        log(f"Save seen error {e}")
+
+
+# LOAD EMAIL LIST
+def load_emails():
+
+    accounts = []
+
+    try:
+
+        with open(EMAIL_FILE) as f:
+
+            for line in f:
+
+                line = line.strip()
+
+                if not line:
+                    continue
+
+                parts = line.split("|")
+
+                if len(parts) < 3:
+                    log(f"Bad format {line}")
+                    continue
+
+                email_addr = parts[0]
+                refresh_token = parts[1]
+                client_id = parts[2]
+
+                accounts.append((email_addr, refresh_token, client_id))
+
+    except Exception as e:
+
+        log(f"Load email error {e}")
+
+    return accounts
+
+
+# CALL API
+def get_messages(email_addr, refresh_token, client_id):
+
+    try:
+
+        url = "https://tools.dongvanfb.net/api/get_messages_oauth2"
+
+        payload = {
+            "email": email_addr,
+            "refresh_token": refresh_token,
+            "client_id": client_id
         }
-    )
+
+        r = requests.post(url, json=payload, timeout=30)
+
+        if r.status_code != 200:
+            log(f"API error {r.text}")
+            return None
+
+        return r.json()
+
+    except Exception as e:
+
+        log(f"API exception {e}")
+        return None
 
 
-def get_mail(email, refresh_token, client_id):
+# CHECK ACCOUNT
+def check_account(account, seen):
 
-    url = "https://tools.dongvanfb.net/api/get_messages_oauth2"
+    email_addr, refresh_token, client_id = account
 
-    data = {
-        "email": email,
-        "refresh_token": refresh_token,
-        "client_id": client_id
-    }
+    try:
 
-    r = requests.post(url, json=data, timeout=30)
+        data = get_messages(email_addr, refresh_token, client_id)
 
-    return r.json()
+        if not data:
+            return
 
+        messages = data.get("messages")
 
-def check(email, refresh_token, client_id):
+        if not messages:
+            return
 
-    res = get_mail(email, refresh_token, client_id)
+        for mail in messages:
 
-    if not res:
-        return
+            subject = mail.get("subject")
+            message_id = mail.get("id")
 
-    if "messages" not in res:
-        return
+            key = email_addr + str(message_id)
 
-    for mail in res["messages"]:
+            if key in seen:
+                continue
 
-        subject = mail.get("subject")
+            seen.add(key)
 
-        send(f"""
-📩 NEW MAIL
+            msg = f"""📩 NEW MAIL
 
-Email: {email}
+Email: {email_addr}
 Subject: {subject}
-""")
+"""
+
+            send(msg)
+
+            log(f"NEW MAIL {email_addr}")
+
+    except Exception as e:
+
+        log(f"Account error {email_addr} {e}")
 
 
+# MAIN LOOP
 def main():
 
-    email = "yourmail@hotmail.com"
-    refresh_token = "REFRESH"
-    client_id = "CLIENT"
+    log("MAIL BOT STARTED")
+
+    send("MAIL BOT STARTED")
+
+    seen = load_seen()
 
     while True:
 
-        check(email, refresh_token, client_id)
+        try:
 
-        time.sleep(10)
+            accounts = load_emails()
+
+            if not accounts:
+
+                log("No accounts")
+
+            else:
+
+                with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+
+                    for acc in accounts:
+                        executor.submit(check_account, acc, seen)
+
+                save_seen(seen)
+
+        except Exception as e:
+
+            log(f"Main error {e}")
+
+        time.sleep(CHECK_INTERVAL)
 
 
 if __name__ == "__main__":
