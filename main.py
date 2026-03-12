@@ -40,7 +40,7 @@ def send(msg):
         log(f"Telegram exception {e}")
 
 
-# LOAD SEEN MAIL
+# LOAD SEEN
 def load_seen():
 
     if not os.path.exists(SEEN_FILE):
@@ -66,7 +66,7 @@ def save_seen(seen):
         log(f"Save seen error {e}")
 
 
-# LOAD EMAIL LIST
+# LOAD EMAILS
 def load_emails():
 
     accounts = []
@@ -84,13 +84,14 @@ def load_emails():
 
                 parts = line.split("|")
 
-                if len(parts) < 3:
+                # format: email|password|refresh_token|client_id
+                if len(parts) < 4:
                     log(f"Bad format {line}")
                     continue
 
                 email_addr = parts[0]
-                refresh_token = parts[1]
-                client_id = parts[2]
+                refresh_token = parts[2]
+                client_id = parts[3]
 
                 accounts.append((email_addr, refresh_token, client_id))
 
@@ -101,7 +102,7 @@ def load_emails():
     return accounts
 
 
-# CALL API
+# API CALL
 def get_messages(email_addr, refresh_token, client_id):
 
     try:
@@ -172,7 +173,7 @@ Subject: {subject}
         log(f"Account error {email_addr} {e}")
 
 
-# MAIN LOOP
+# MAIN
 def main():
 
     log("MAIL BOT STARTED")
@@ -188,9 +189,7 @@ def main():
             accounts = load_emails()
 
             if not accounts:
-
                 log("No accounts")
-
             else:
 
                 with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
