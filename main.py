@@ -1,11 +1,11 @@
-import imaplib
+=import imaplib
 import email
 import requests
 import time
 import json
 import os
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 BOT_TOKEN = "8444717416:AAGSTPQnuwMd1vfn_C3kyAHrGu59AgNH5Xk"
 CHAT_ID = "1460560636"
@@ -39,11 +39,10 @@ def send(msg):
             log(f"Telegram error {r.text}")
 
     except Exception as e:
-
         log(f"Telegram exception {e}")
 
 
-# SEEN
+# LOAD SEEN
 def load_seen():
 
     if not os.path.exists(SEEN_FILE):
@@ -87,7 +86,12 @@ def get_access_token(refresh, client_id):
 
         j = r.json()
 
-        return j.get("access_token")
+        token = j.get("access_token")
+
+        if not token:
+            log(f"Token error {j}")
+
+        return token
 
     except Exception as e:
 
@@ -115,18 +119,18 @@ def imap_login(email_addr, access_token):
 
 
 # GET MAIL
-def get_latest_email(imap):
+def get_unseen_email(imap):
 
     try:
 
         imap.select("inbox")
 
-        status, messages = imap.search(None, "ALL")
+        status, messages = imap.search(None, "UNSEEN")
 
         ids = messages[0].split()
 
         if not ids:
-            return None
+            return None, None
 
         latest = ids[-1]
 
@@ -138,15 +142,17 @@ def get_latest_email(imap):
 
         subject = msg["Subject"] or "(No Subject)"
 
-        return subject
+        message_id = msg["Message-ID"]
+
+        return subject, message_id
 
     except Exception as e:
 
         log(f"Read mail error {e}")
-        return None
+        return None, None
 
 
-# LOAD EMAILS
+# LOAD EMAIL LIST
 def load_emails():
 
     accounts = []
@@ -200,14 +206,14 @@ def check_account(account, seen):
         if not imap:
             return
 
-        subject = get_latest_email(imap)
+        subject, message_id = get_unseen_email(imap)
 
         imap.logout()
 
         if not subject:
             return
 
-        key = email_addr + subject
+        key = email_addr + str(message_id)
 
         if key in seen:
             return
@@ -252,10 +258,8 @@ def main():
 
                 with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
 
-                    futures = [executor.submit(check_account, acc, seen) for acc in accounts]
-
-                    for future in as_completed(futures):
-                        pass
+                    for acc in accounts:
+                        executor.submit(check_account, acc, seen)
 
                 save_seen(seen)
 
