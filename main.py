@@ -5,6 +5,7 @@ import time
 import json
 import os
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BOT_TOKEN = "8444717416:AAGSTPQnuwMd1vfn_C3kyAHrGu59AgNH5Xk"
 CHAT_ID = "1460560636"
@@ -13,29 +14,36 @@ EMAIL_FILE = "emails.txt"
 SEEN_FILE = "seen.json"
 
 CHECK_INTERVAL = 10
+MAX_THREADS = 20
 
 
 def log(msg):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+# TELEGRAM
 def send(msg):
 
     try:
 
-        requests.post(
+        r = requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": CHAT_ID,
                 "text": msg
             },
-            timeout=15
+            timeout=20
         )
 
+        if r.status_code != 200:
+            log(f"Telegram error {r.text}")
+
     except Exception as e:
-        log(f"Telegram error: {e}")
+
+        log(f"Telegram exception {e}")
 
 
+# SEEN
 def load_seen():
 
     if not os.path.exists(SEEN_FILE):
@@ -58,9 +66,10 @@ def save_seen(seen):
             json.dump(list(seen), f)
 
     except Exception as e:
-        log(f"Save seen error: {e}")
+        log(f"Save seen error {e}")
 
 
+# TOKEN
 def get_access_token(refresh, client_id):
 
     url = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
@@ -82,10 +91,11 @@ def get_access_token(refresh, client_id):
 
     except Exception as e:
 
-        log(f"Token error: {e}")
+        log(f"Token error {e}")
         return None
 
 
+# IMAP LOGIN
 def imap_login(email_addr, access_token):
 
     try:
@@ -94,16 +104,17 @@ def imap_login(email_addr, access_token):
 
         imap = imaplib.IMAP4_SSL("imap-mail.outlook.com")
 
-        imap.authenticate("XOAUTH2", lambda x: auth_string)
+        imap.authenticate("XOAUTH2", lambda x: auth_string.encode())
 
         return imap
 
     except Exception as e:
 
-        log(f"IMAP login error: {email_addr} {e}")
+        log(f"IMAP login error {email_addr} {e}")
         return None
 
 
+# GET MAIL
 def get_latest_email(imap):
 
     try:
@@ -125,16 +136,17 @@ def get_latest_email(imap):
 
         msg = email.message_from_bytes(raw)
 
-        subject = msg["Subject"]
+        subject = msg["Subject"] or "(No Subject)"
 
         return subject
 
     except Exception as e:
 
-        log(f"Read mail error: {e}")
+        log(f"Read mail error {e}")
         return None
 
 
+# LOAD EMAILS
 def load_emails():
 
     accounts = []
@@ -152,8 +164,8 @@ def load_emails():
 
                 parts = line.split("|")
 
-                if len(parts) < 3:
-                    log(f"Bad format: {line}")
+                if len(parts) < 4:
+                    log(f"Bad format {line}")
                     continue
 
                 email_addr = parts[0]
@@ -164,64 +176,65 @@ def load_emails():
 
     except Exception as e:
 
-        log(f"Load email error: {e}")
+        log(f"Load email error {e}")
 
     return accounts
 
 
-def check_mail(accounts, seen):
+# CHECK ACCOUNT
+def check_account(account, seen):
 
-    for email_addr, refresh, client_id in accounts:
+    email_addr, refresh, client_id = account
 
-        try:
+    try:
 
-            log(f"Checking {email_addr}")
+        log(f"Checking {email_addr}")
 
-            token = get_access_token(refresh, client_id)
+        token = get_access_token(refresh, client_id)
 
-            if not token:
-                continue
+        if not token:
+            return
 
-            imap = imap_login(email_addr, token)
+        imap = imap_login(email_addr, token)
 
-            if not imap:
-                continue
+        if not imap:
+            return
 
-            subject = get_latest_email(imap)
+        subject = get_latest_email(imap)
 
-            imap.logout()
+        imap.logout()
 
-            if not subject:
-                continue
+        if not subject:
+            return
 
-            key = email_addr + subject
+        key = email_addr + subject
 
-            if key in seen:
-                continue
+        if key in seen:
+            return
 
-            seen.add(key)
+        seen.add(key)
 
-            msg = f"""
-📩 NEW MAIL
+        msg = f"""📩 NEW MAIL
 
 Email: {email_addr}
 Subject: {subject}
 """
 
-            send(msg)
+        send(msg)
 
-            log(f"New mail {email_addr}")
+        log(f"NEW MAIL {email_addr}")
 
-            time.sleep(1)
+    except Exception as e:
 
-        except Exception as e:
-
-            log(f"Account error {email_addr} {e}")
+        log(f"Account error {email_addr} {e}")
 
 
+# MAIN LOOP
 def main():
 
     log("MAIL BOT STARTED")
+
+    send("MAIL BOT STARTED")
 
     seen = load_seen()
 
@@ -233,17 +246,22 @@ def main():
 
             if not accounts:
 
-                log("No accounts found")
+                log("No accounts")
 
             else:
 
-                check_mail(accounts, seen)
+                with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+
+                    futures = [executor.submit(check_account, acc, seen) for acc in accounts]
+
+                    for future in as_completed(futures):
+                        pass
 
                 save_seen(seen)
 
         except Exception as e:
 
-            log(f"Main loop error {e}")
+            log(f"Main error {e}")
 
         log(f"Sleep {CHECK_INTERVAL}s")
 
