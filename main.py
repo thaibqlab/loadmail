@@ -3,6 +3,9 @@ import time
 import json
 import os
 from datetime import datetime
+from bs4 import BeautifulSoup
+
+# ================= CONFIG =================
 
 BOT_TOKEN = "8444717416:AAGSTPQnuwMd1vfn_C3kyAHrGu59AgNH5Xk"
 CHAT_ID = "1460560636"
@@ -10,55 +13,71 @@ CHAT_ID = "1460560636"
 EMAIL_FILE = "emails.txt"
 SEEN_FILE = "seen.json"
 
-CHECK_INTERVAL = 20
+ACCOUNT_DELAY = 0.3
+CHECK_INTERVAL = 5
+
+API_URL = "https://tools.dongvanfb.net/api/get_messages_oauth2"
+
+# Telegram message limit
+TELEGRAM_LIMIT = 4096
+MAIL_CONTENT_LIMIT = 3500
+
+# ==========================================
 
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-# TELEGRAM
+# ================= TELEGRAM =================
+
 def send(msg):
 
-    try:
+    # đảm bảo message không vượt giới hạn Telegram
+    msg = msg[:TELEGRAM_LIMIT]
 
-        r = requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={
-                "chat_id": CHAT_ID,
-                "text": msg
-            },
-            timeout=20
-        )
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
-        if r.status_code == 429:
+    while True:
+        try:
 
-            data = r.json()
+            r = requests.post(
+                url,
+                json={
+                    "chat_id": CHAT_ID,
+                    "text": msg
+                },
+                timeout=20
+            )
 
-            wait = data["parameters"]["retry_after"]
+            if r.status_code == 200:
+                return
 
-            log(f"Telegram rate limit wait {wait}s")
+            if r.status_code == 429:
+                data = r.json()
+                wait = data["parameters"]["retry_after"]
+                log(f"Telegram rate limit → wait {wait}s")
+                time.sleep(wait)
 
-            time.sleep(wait)
+            else:
+                log(f"Telegram error {r.status_code}")
+                return
 
-    except Exception as e:
-
-        log(f"Telegram error {e}")
-
-    time.sleep(1)
+        except Exception as e:
+            log(f"Telegram exception {e}")
+            time.sleep(3)
 
 
-# LOAD SEEN
+# ================= SEEN MAIL =================
+
 def load_seen():
 
     if not os.path.exists(SEEN_FILE):
         return set()
 
     try:
-
         with open(SEEN_FILE) as f:
             return set(json.load(f))
-
     except:
         return set()
 
@@ -66,18 +85,21 @@ def load_seen():
 def save_seen(seen):
 
     try:
-
         with open(SEEN_FILE, "w") as f:
             json.dump(list(seen), f)
-
     except:
         pass
 
 
-# LOAD EMAIL LIST
+# ================= LOAD EMAIL =================
+
 def load_emails():
 
     accounts = []
+
+    if not os.path.exists(EMAIL_FILE):
+        log("emails.txt not found")
+        return accounts
 
     with open(EMAIL_FILE) as f:
 
@@ -102,10 +124,9 @@ def load_emails():
     return accounts
 
 
-# CALL MAIL API
-def get_messages(email_addr, refresh_token, client_id):
+# ================= API =================
 
-    url = "https://tools.dongvanfb.net/api/get_messages_oauth2"
+def get_messages(email_addr, refresh_token, client_id):
 
     payload = {
         "email": email_addr,
@@ -117,10 +138,9 @@ def get_messages(email_addr, refresh_token, client_id):
 
         try:
 
-            r = requests.post(url, json=payload, timeout=25)
+            r = requests.post(API_URL, json=payload, timeout=25)
 
             if r.status_code == 200:
-
                 try:
                     return r.json()
                 except:
@@ -129,13 +149,53 @@ def get_messages(email_addr, refresh_token, client_id):
             time.sleep(2)
 
         except:
-
             time.sleep(2)
 
     return None
 
 
-# CHECK ACCOUNT
+# ================= CLEAN TEXT =================
+
+def clean_text(text):
+
+    return text.encode("utf-8", "ignore").decode("utf-8")
+
+
+# ================= PARSE MAIL =================
+
+def parse_mail_content(mail):
+
+    html = (
+        mail.get("message")
+        or mail.get("body")
+        or mail.get("content")
+        or mail.get("text")
+        or mail.get("snippet")
+        or ""
+    )
+
+    if not html:
+        return "No content"
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+
+    text = soup.get_text(separator="\n")
+
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+
+    clean = "\n".join(lines)
+
+    clean = clean_text(clean)
+
+    # giới hạn nội dung mail
+    return clean[:MAIL_CONTENT_LIMIT]
+
+
+# ================= CHECK ACCOUNT =================
+
 def check_account(account, seen):
 
     email_addr, refresh_token, client_id = account
@@ -143,6 +203,7 @@ def check_account(account, seen):
     data = get_messages(email_addr, refresh_token, client_id)
 
     if not data:
+        log(f"No API response {email_addr}")
         return
 
     messages = data.get("messages")
@@ -150,30 +211,41 @@ def check_account(account, seen):
     if not messages:
         return
 
-    for mail in messages:
+    mail = messages[0]
 
-        subject = mail.get("subject")
-        message_id = mail.get("id")
+    subject = clean_text(mail.get("subject") or "No subject")
 
-        key = email_addr + str(message_id)
+    body = parse_mail_content(mail)
 
-        if key in seen:
-            continue
+    message_id = mail.get("id") or subject + body
 
-        seen.add(key)
+    key = email_addr + str(message_id)
 
-        msg = f"""📩 NEW MAIL
+    if key in seen:
+        return
 
-Email: {email_addr}
-Subject: {subject}
+    seen.add(key)
+
+    msg = f"""
+📩 NEW MAIL
+
+📧 Email:
+{email_addr}
+
+📌 Subject:
+{subject}
+
+📄 Content:
+{body}
 """
 
-        send(msg)
+    log(f"NEW MAIL → {email_addr}")
 
-        log(f"NEW MAIL {email_addr}")
+    send(msg)
 
 
-# MAIN LOOP
+# ================= MAIN =================
+
 def main():
 
     log("MAIL BOT STARTED")
@@ -188,13 +260,17 @@ def main():
 
             accounts = load_emails()
 
+            log(f"Scanning {len(accounts)} accounts")
+
             for acc in accounts:
 
                 check_account(acc, seen)
 
-                time.sleep(0.5)
+                time.sleep(ACCOUNT_DELAY)
 
             save_seen(seen)
+
+            log("Scan finished")
 
         except Exception as e:
 
